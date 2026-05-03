@@ -12,8 +12,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout your package source
         uses: actions/checkout@v5
+        with:
+          path: my-packages
+
+      - name: Checkout GL.iNet OpenWrt 5.4 (Beryl 7 base)
+        uses: actions/checkout@v5
+        with:
+          repository: gl-inet/openwrt-5.4
+          ref: openwrt-5.4
+          path: openwrt
 
       - name: Install build dependencies
         run: |
@@ -33,23 +42,22 @@ jobs:
             openwrt-build/
           key: ${{ runner.os }}-glinet-openwrt-5.4-mt7987
 
-      - name: Clone GL.iNet OpenWrt 5.4 repository (based on 21.02)
+      - name: Update and install feeds
         if: steps.cache-openwrt.outputs.cache-hit != 'true'
+        working-directory: openwrt
         run: |
-          git clone -b openwrt-5.4 https://github.com/gl-inet/openwrt-5.4.git openwrt
-          cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Copy packages to build tree
+      - name: Copy your packages into the build tree
         run: |
-          cp -r kmod-amneziawg openwrt/package/
-          cp -r amneziawg-tools openwrt/package/
-          cp -r luci-proto-amneziawg openwrt/package/
+          cp -r my-packages/kmod-amneziawg openwrt/package/
+          cp -r my-packages/amneziawg-tools openwrt/package/
+          cp -r my-packages/luci-proto-amneziawg openwrt/package/
 
       - name: Configure for GL-MT3600BE and select packages
+        working-directory: openwrt
         run: |
-          cd openwrt
           cat >> .config << 'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_mt7987=y
@@ -62,8 +70,8 @@ jobs:
           make defconfig
 
       - name: Build packages
+        working-directory: openwrt
         run: |
-          cd openwrt
           make -j$(nproc) package/kmod-amneziawg/compile
           make -j$(nproc) package/amneziawg-tools/compile
           make -j$(nproc) package/luci-proto-amneziawg/compile
