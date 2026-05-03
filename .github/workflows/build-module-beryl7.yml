@@ -1,4 +1,4 @@
-name: Create Release on Tag
+name: Create Release on Tag (Beryl 7)
 
 on:
   push:
@@ -6,126 +6,118 @@ on:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
-      tag_name:
-        description: 'Release tag name (e.g., v1.0.0)'
+      version:
+        description: 'Release version (e.g., v1.0.0)'
         required: true
         type: string
 
 jobs:
-  build:
-    name: Build AmneziaWG for GL-MT3600BE (Beryl 7)
+  build-beryl7:
     runs-on: ubuntu-18.04
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - name: Checkout AWG source code
+        uses: actions/checkout@v5
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt update
           sudo apt install -y asciidoc bash bc binutils bzip2 fastjar flex gawk gcc \
-            genisoimage gettext git intltool jikespg libgtk2.0-dev libncurses5-dev \
-            libssl1.0-dev make mercurial patch perl-modules python2.7-dev rsync ruby \
-            sdcc subversion unzip util-linux wget xsltproc zlib1g-dev
+          genisoimage gettext git intltool jikespg libgtk2.0-dev libncurses5-dev \
+          libssl1.0-dev make mercurial patch perl-modules python2.7-dev rsync ruby \
+          sdcc subversion unzip util-linux wget xsltproc zlib1g-dev
 
       - name: Install Python dependencies
-        run: sudo apt install -y python3-pyelftools
+        run: |
+          sudo apt install -y python3-pyelftools
 
-      # Cache the SDK to avoid re-downloading every time
-      - name: Cache OpenWrt SDK (mt7981)
+      - name: Cache GL.iNet SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          path: openwrt-sdk-*
-          key: ${{ runner.os }}-sdk-mt7981-v1  # Increment version if SDK changes
+          path: openwrt-sdk-mediatek-mt7981_*
+          key: ${{ runner.os }}-gl-sdk-mt7981
 
-      - name: Download and extract GL.iNet mt7981 SDK
+      - name: Download GL.iNet SDK (mt7981)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get the latest release download URL from gl-inet-builder/openwrt-sdk-mt7981
+          # Get the latest release asset URL from gl-inet-builder/openwrt-sdk-mt7981
           API_URL="https://api.github.com/repos/gl-inet-builder/openwrt-sdk-mt7981/releases/latest"
-          SDK_URL=$(curl -s $API_URL | grep -o 'https://.*\.tar\.xz' | head -n1)
+          SDK_URL=$(curl -s -H "Authorization: token $GH_TOKEN" $API_URL | \
+                    jq -r '.assets[] | select(.name | test("openwrt-sdk-.*-mediatek-mt7981_.*\\.tar\\.xz")) | .browser_download_url' | head -1)
           if [ -z "$SDK_URL" ]; then
-            echo "Failed to find SDK download URL"
+            echo "No SDK asset found for mt7981"
             exit 1
           fi
           echo "Downloading SDK from $SDK_URL"
-          wget "$SDK_URL" -O sdk.tar.xz
+          wget -q "$SDK_URL" -O sdk.tar.xz
           tar -xf sdk.tar.xz
           rm sdk.tar.xz
-          # The extracted directory name may vary; we'll let later steps find it
 
       - name: Setup SDK and feeds
         run: |
-          # Find SDK directory
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*mediatek-mt7981*" -type d | head -n1)
           if [ -z "$SDK_DIR" ]; then
             echo "SDK directory not found"
             exit 1
           fi
           WORKSPACE_DIR=$(pwd)
           cd "$SDK_DIR"
-
-          # Update feeds (using OpenWrt 21.02 default feeds, kernel 5.4)
+          # Update feeds (needed for LuCI)
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
-          # Copy custom packages into the SDK
+          # Copy custom packages
           cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
           cp -r "$WORKSPACE_DIR/amneziawg-tools" package/
           cp -r "$WORKSPACE_DIR/luci-proto-amneziawg" package/
-
-          # Configure which packages to build
+          # Configure build (only our packages)
           cat > .config <<EOF
-            CONFIG_PACKAGE_kmod-amneziawg=m
-            CONFIG_PACKAGE_amneziawg-tools=y
-            CONFIG_PACKAGE_luci-proto-amneziawg=y
-            CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y
-            EOF
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_mt7981=y
+          CONFIG_TARGET_mediatek_mt7981_DEVICE_glinet_gl-mt3000=y
+          CONFIG_PACKAGE_kmod-amneziawg=m
+          CONFIG_PACKAGE_amneziawg-tools=y
+          CONFIG_PACKAGE_luci-proto-amneziawg=y
+          CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y
+          EOF
           make defconfig
 
-      - name: Build AmneziaWG packages
+      - name: Build packages
         run: |
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*mediatek-mt7981*" -type d | head -n1)
           cd "$SDK_DIR"
-
-          # Build kmod (kernel module)
+          echo "Building kmod-amneziawg..."
           make package/kmod-amneziawg/{download,prepare,compile} V=s || true
-
-          # Build userspace tools
+          echo "Building amneziawg-tools..."
           make package/amneziawg-tools/{download,prepare,compile} V=s
-
-          # Build LuCI proto
+          echo "Building luci-proto-amneziawg..."
           make package/luci-proto-amneziawg/{download,prepare,compile} V=s
-
           echo "Build completed. Packages:"
-          find bin/ -name "*.?pk" | grep -E "(amneziawg|luci-proto-amneziawg|luci-i18n-amneziawg)" | head -10
+          find bin/ -name "*.ipk" | grep -E "(amneziawg|luci-proto-amneziawg)" | head -10
 
       - name: Prepare artifacts
         run: |
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*mediatek-mt7981*" -type d | head -n1)
           mkdir -p awgrelease
-
-          # Determine the tag name (from push or manual dispatch)
+          # Determine release version from tag or input
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag_name }}"
+            VERSION="${{ inputs.version }}"
           else
-            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${GITHUB_REF#refs/tags/}"
           fi
-          # Remove leading 'v' if present for consistency
-          TAG="${TAG#v}"
-          postfix="v${TAG}_aarch64_cortex-a53_mt7981_beryl7"
-
-          # Copy built packages with new naming
-          find "$SDK_DIR/bin/packages" -name "amneziawg-tools*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/amneziawg-tools_${postfix}.${ext}"' _ {} "${postfix}" \;
-          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-proto-amneziawg_${postfix}.${ext}"' _ {} "${postfix}" \;
-          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-i18n-amneziawg-ru_${postfix}.${ext}"' _ {} "${postfix}" \;
-          find "$SDK_DIR/bin/targets" -name "kmod-amneziawg*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/kmod-amneziawg_${postfix}.${ext}"' _ {} "${postfix}" \;
-
-          echo "Artifacts ready:"
+          POSTFIX="${VERSION}_aarch64_cortex-a53_mediatek_mt7981"
+          # Copy packages with consistent naming
+          find "$SDK_DIR/bin/packages" -name "amneziawg-tools*.ipk" -exec cp {} "awgrelease/amneziawg-tools_${POSTFIX}.ipk" \; || echo "amneziawg-tools not found"
+          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.ipk" -exec cp {} "awgrelease/luci-proto-amneziawg_${POSTFIX}.ipk" \; || echo "luci-proto-amneziawg not found"
+          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.ipk" -exec cp {} "awgrelease/luci-i18n-amneziawg-ru_${POSTFIX}.ipk" \; || echo "luci-i18n not found"
+          find "$SDK_DIR/bin/targets" -name "kmod-amneziawg*.ipk" -exec cp {} "awgrelease/kmod-amneziawg_${POSTFIX}.ipk" \; || echo "kmod-amneziawg not found"
+          echo "Artifacts:"
           ls -la awgrelease/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: awgrelease/*.?pk
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          files: awgrelease/*.ipk
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          generate_release_notes: true
