@@ -15,10 +15,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install Python dependencies
+      - name: Install build dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install setuptools pyelftools
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ \
+            gawk gettext git java-propose-classpath libelf-dev libncurses5-dev \
+            libncursesw5-dev libssl-dev python3 python3-setuptools unzip wget \
+            xsltproc zlib1g-dev
+          python3 -m pip install --upgrade pip setuptools pyelftools
 
       - name: Cache OpenWrt build tree
         id: cache-openwrt
@@ -27,14 +31,13 @@ jobs:
           path: |
             openwrt/
             openwrt-build/
-          key: ${{ runner.os }}-openwrt-21.02-mt7987-beryl7
+          key: ${{ runner.os }}-glinet-openwrt-5.4-mt7987
 
-      - name: Clone OpenWrt 21.02 and add MediaTek feed
+      - name: Clone GL.iNet OpenWrt 5.4 repository (based on 21.02)
         if: steps.cache-openwrt.outputs.cache-hit != 'true'
         run: |
-          git clone -b openwrt-21.02 https://git.openwrt.org/openwrt/openwrt.git openwrt
+          git clone -b openwrt-5.4 https://github.com/gl-inet/openwrt-5.4.git openwrt
           cd openwrt
-          echo "src-git mtk_feed https://git01.mediatek.com/openwrt/feeds/mtk-openwrt-feeds.git;openwrt-21.02" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
