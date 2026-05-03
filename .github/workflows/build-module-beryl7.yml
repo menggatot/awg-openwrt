@@ -1,4 +1,4 @@
-name: Build AmneziaWG for GL-MT3600BE (Beryl 7)
+name: Build for GL-MT3600BE (Beryl 7) on Release
 
 on:
   push:
@@ -12,26 +12,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout your package source
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v5
 
-      - name: Install build dependencies
+      - name: Install Python dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pyelftools build-essential ccache \
-            ecj fastjar file g++ gawk gettext git java-propose-classpath \
-            libelf-dev libncurses5-dev libncursesw5-dev libssl-dev \
-            python3 python3-distutils python3-setuptools unzip wget \
-            xsltproc zlib1g-dev
+          python3 -m pip install --upgrade pip
+          python3 -m pip install setuptools pyelftools
 
       - name: Cache OpenWrt build tree
         id: cache-openwrt
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             openwrt/
             openwrt-build/
-          key: ${{ runner.os }}-openwrt-21.02-mt7987
+          key: ${{ runner.os }}-openwrt-21.02-mt7987-beryl7
 
       - name: Clone OpenWrt 21.02 and add MediaTek feed
         if: steps.cache-openwrt.outputs.cache-hit != 'true'
@@ -42,7 +38,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Copy your packages into the build tree
+      - name: Copy packages to build tree
         run: |
           cp -r kmod-amneziawg openwrt/package/
           cp -r amneziawg-tools openwrt/package/
@@ -77,10 +73,11 @@ jobs:
           find openwrt/bin/packages -name "luci-proto-amneziawg*.ipk" -exec cp {} "release/luci-proto-amneziawg_${postfix}.ipk" \;
           find openwrt/bin/packages -name "luci-i18n-amneziawg-ru*.ipk" -exec cp {} "release/luci-i18n-amneziawg-ru_${postfix}.ipk" \;
           find openwrt/bin/targets -name "kmod-amneziawg*.ipk" -exec cp {} "release/kmod-amneziawg_${postfix}.ipk" \;
+          echo "Built packages:"
           ls -la release/
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: release/*.ipk
           tag_name: ${{ github.ref_name }}
