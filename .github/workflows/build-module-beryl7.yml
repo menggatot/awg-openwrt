@@ -1,94 +1,131 @@
-name: Build for GL-MT3600BE (Beryl 7) on Release
+name: Create Release on Tag
 
 on:
   push:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g., v1.0.0)'
+        required: true
+        type: string
 
 jobs:
   build:
-    name: Build for Beryl 7
-    runs-on: ubuntu-latest
-
+    name: Build AmneziaWG for GL-MT3600BE (Beryl 7)
+    runs-on: ubuntu-18.04
     steps:
-      - name: Checkout your package source
-        uses: actions/checkout@v5
-        with:
-          path: my-packages
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-      - name: Checkout GL.iNet OpenWrt 5.4 (Beryl 7 base)
-        uses: actions/checkout@v5
-        with:
-          repository: gl-inet/openwrt-5.4
-          ref: openwrt-5.4
-          path: openwrt
-
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential ccache ecj fastjar file g++ \
-            gawk gettext git java-propose-classpath libelf-dev libncurses5-dev \
-            libncursesw5-dev libssl-dev python3 python3-setuptools unzip wget \
-            xsltproc zlib1g-dev
-          python3 -m pip install --upgrade pip setuptools pyelftools
+          sudo apt update
+          sudo apt install -y asciidoc bash bc binutils bzip2 fastjar flex gawk gcc \
+            genisoimage gettext git intltool jikespg libgtk2.0-dev libncurses5-dev \
+            libssl1.0-dev make mercurial patch perl-modules python2.7-dev rsync ruby \
+            sdcc subversion unzip util-linux wget xsltproc zlib1g-dev
 
-      - name: Cache OpenWrt build tree
-        id: cache-openwrt
-        uses: actions/cache@v5
+      - name: Install Python dependencies
+        run: sudo apt install -y python3-pyelftools
+
+      # Cache the SDK to avoid re-downloading every time
+      - name: Cache OpenWrt SDK (mt7981)
+        id: cache-sdk
+        uses: actions/cache@v4
         with:
-          path: |
-            openwrt/
-            openwrt-build/
-          key: ${{ runner.os }}-glinet-openwrt-5.4-mt7987
+          path: openwrt-sdk-*
+          key: ${{ runner.os }}-sdk-mt7981-v1  # Increment version if SDK changes
 
-      - name: Update and install feeds
-        if: steps.cache-openwrt.outputs.cache-hit != 'true'
-        working-directory: openwrt
+      - name: Download and extract GL.iNet mt7981 SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
+          # Get the latest release download URL from gl-inet-builder/openwrt-sdk-mt7981
+          API_URL="https://api.github.com/repos/gl-inet-builder/openwrt-sdk-mt7981/releases/latest"
+          SDK_URL=$(curl -s $API_URL | grep -o 'https://.*\.tar\.xz' | head -n1)
+          if [ -z "$SDK_URL" ]; then
+            echo "Failed to find SDK download URL"
+            exit 1
+          fi
+          echo "Downloading SDK from $SDK_URL"
+          wget "$SDK_URL" -O sdk.tar.xz
+          tar -xf sdk.tar.xz
+          rm sdk.tar.xz
+          # The extracted directory name may vary; we'll let later steps find it
+
+      - name: Setup SDK and feeds
+        run: |
+          # Find SDK directory
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          if [ -z "$SDK_DIR" ]; then
+            echo "SDK directory not found"
+            exit 1
+          fi
+          WORKSPACE_DIR=$(pwd)
+          cd "$SDK_DIR"
+
+          # Update feeds (using OpenWrt 21.02 default feeds, kernel 5.4)
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Copy your packages into the build tree
-        run: |
-          cp -r my-packages/kmod-amneziawg openwrt/package/
-          cp -r my-packages/amneziawg-tools openwrt/package/
-          cp -r my-packages/luci-proto-amneziawg openwrt/package/
+          # Copy custom packages into the SDK
+          cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
+          cp -r "$WORKSPACE_DIR/amneziawg-tools" package/
+          cp -r "$WORKSPACE_DIR/luci-proto-amneziawg" package/
 
-      - name: Configure for GL-MT3600BE and select packages
-        working-directory: openwrt
-        run: |
-          cat >> .config << 'EOF'
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_mt7987=y
-          CONFIG_TARGET_mediatek_mt7987_DEVICE_glinet_gl-mt3600be=y
-          CONFIG_PACKAGE_kmod-amneziawg=m
-          CONFIG_PACKAGE_amneziawg-tools=y
-          CONFIG_PACKAGE_luci-proto-amneziawg=y
-          CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y
-          EOF
+          # Configure which packages to build
+          cat > .config <<EOF
+            CONFIG_PACKAGE_kmod-amneziawg=m
+            CONFIG_PACKAGE_amneziawg-tools=y
+            CONFIG_PACKAGE_luci-proto-amneziawg=y
+            CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y
+            EOF
           make defconfig
 
-      - name: Build packages
-        working-directory: openwrt
+      - name: Build AmneziaWG packages
         run: |
-          make -j$(nproc) package/kmod-amneziawg/compile
-          make -j$(nproc) package/amneziawg-tools/compile
-          make -j$(nproc) package/luci-proto-amneziawg/compile
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          cd "$SDK_DIR"
+
+          # Build kmod (kernel module)
+          make package/kmod-amneziawg/{download,prepare,compile} V=s || true
+
+          # Build userspace tools
+          make package/amneziawg-tools/{download,prepare,compile} V=s
+
+          # Build LuCI proto
+          make package/luci-proto-amneziawg/{download,prepare,compile} V=s
+
+          echo "Build completed. Packages:"
+          find bin/ -name "*.?pk" | grep -E "(amneziawg|luci-proto-amneziawg|luci-i18n-amneziawg)" | head -10
 
       - name: Prepare artifacts
         run: |
-          mkdir -p release
-          postfix="v${GITHUB_REF_NAME}_aarch64_cortex-a53_mediatek_mt7987"
-          find openwrt/bin/packages -name "amneziawg-tools*.ipk" -exec cp {} "release/amneziawg-tools_${postfix}.ipk" \;
-          find openwrt/bin/packages -name "luci-proto-amneziawg*.ipk" -exec cp {} "release/luci-proto-amneziawg_${postfix}.ipk" \;
-          find openwrt/bin/packages -name "luci-i18n-amneziawg-ru*.ipk" -exec cp {} "release/luci-i18n-amneziawg-ru_${postfix}.ipk" \;
-          find openwrt/bin/targets -name "kmod-amneziawg*.ipk" -exec cp {} "release/kmod-amneziawg_${postfix}.ipk" \;
-          echo "Built packages:"
-          ls -la release/
+          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          mkdir -p awgrelease
 
-      - name: Release
-        uses: softprops/action-gh-release@v3
+          # Determine the tag name (from push or manual dispatch)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Remove leading 'v' if present for consistency
+          TAG="${TAG#v}"
+          postfix="v${TAG}_aarch64_cortex-a53_mt7981_beryl7"
+
+          # Copy built packages with new naming
+          find "$SDK_DIR/bin/packages" -name "amneziawg-tools*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/amneziawg-tools_${postfix}.${ext}"' _ {} "${postfix}" \;
+          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-proto-amneziawg_${postfix}.${ext}"' _ {} "${postfix}" \;
+          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-i18n-amneziawg-ru_${postfix}.${ext}"' _ {} "${postfix}" \;
+          find "$SDK_DIR/bin/targets" -name "kmod-amneziawg*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/kmod-amneziawg_${postfix}.${ext}"' _ {} "${postfix}" \;
+
+          echo "Artifacts ready:"
+          ls -la awgrelease/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          files: release/*.ipk
-          tag_name: ${{ github.ref_name }}
+          files: awgrelease/*.?pk
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
