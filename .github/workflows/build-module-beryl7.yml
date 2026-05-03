@@ -1,4 +1,4 @@
-name: Build AmneziaWG for GL-MT3600BE (Beryl 7)
+name: Build AmneziaWG for GL.iNet Beryl 7
 
 on:
   push:
@@ -7,152 +7,158 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'OpenWrt SDK version (e.g., 21.02.7)'
+        description: 'GL.iNet Firmware Version (e.g., 4.8.7)'
         required: true
-        default: '21.02.7'
+        type: string
+        default: '4.8.7'
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
         type: string
 
-# Force Node.js 24 for actions to silence deprecation warnings
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  build-beryl7:
-    runs-on: ubuntu-22.04
-    name: Build for Beryl 7 (MT7981 SDK)
-
+  generate-config:
+    runs-on: ubuntu-18.04
+    outputs:
+      job-config: ${{ steps.generate-config.outputs.job-config }}
     steps:
-      - name: Checkout source code
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get version from inputs or tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "workflow_call" ]; then
+            VERSION="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Job Config
+        id: generate-config
+        run: node index.js "$VERSION"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-beryl7:
+    name: Build GL.iNet Beryl 7 (GL-MT3600BE) - v${{ needs.generate-config.outputs.job-config }}
+    runs-on: ubuntu-18.04
+    needs: generate-config
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            asciidoc bash bc binutils bzip2 fastjar flex gawk gcc \
-            genisoimage gettext git intltool jikespg libgtk2.0-dev \
-            libncurses5-dev libssl-dev make mercurial patch \
-            perl-modules python3-dev rsync ruby sdcc subversion unzip \
-            util-linux wget xsltproc zlib1g-dev
-          # Python 2 is not needed; OpenWrt 21.02 uses Python 3
-          # libssl1.0-dev replaced by libssl-dev for Ubuntu 22.04
+          sudo apt update
+          sudo apt install -y asciidoc bash bc binutils bzip2 fastjar flex gawk \
+          gcc genisoimage gettext git intltool jikespg libgtk2.0-dev libncurses5-dev \
+          libssl1.0-dev make mercurial patch perl-modules python2.7-dev rsync ruby \
+          sdcc subversion unzip util-linux wget xsltproc zlib1g-dev
 
-      - name: Cache OpenWrt SDK (MT7981)
+      - name: Cache GL.iNet SDK (mt7981)
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          path: openwrt-sdk-*/
-          key: ${{ runner.os }}-sdk-mt7981-${{ inputs.version || '21.02.7' }}
+          path: glinet-sdk
+          key: glinet-sdk-mt7981-beryl7
+          restore-keys: glinet-sdk-mt7981-
 
-      - name: Download and extract GL.iNet MT7981 SDK
+      - name: Setup GL.iNet SDK (mt7981)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          VERSION="${{ inputs.version || '21.02.7' }}"
-          SDK_URL="https://github.com/gl-inet-builder/openwrt-sdk-mt7981/releases/download/v${VERSION}/openwrt-sdk-${VERSION}-mediatek-mt7981_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-          echo "Downloading SDK from: $SDK_URL"
-          wget -q "$SDK_URL" -O sdk.tar.xz
-          tar -xf sdk.tar.xz
-          rm sdk.tar.xz
+          # Clone the official gl-inet/sdk repository
+          git clone https://github.com/gl-inet/sdk.git
+          cd sdk
+          
+          # Download the mt7981 SDK
+          # This clones the openwrt-sdk-mt7981 repo from gl-inet-builder
+          ./download.sh mt7981-2102
+          
+          # The download script creates a directory: sdk/2102/mt7981
+          # We'll move it to a known location for caching
+          cd ..
+          mkdir -p glinet-sdk
+          mv sdk/2102/mt7981/* glinet-sdk/
+          
+          # Clean up the original sdk directory
+          rm -rf sdk
 
-      - name: Setup SDK and feeds
+      - name: Prepare build environment
         run: |
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
-          if [ -z "$SDK_DIR" ]; then
-            echo "SDK directory not found"
-            exit 1
-          fi
-          WORKSPACE_DIR=$(pwd)
-          cd "$SDK_DIR"
-
-          # Update feeds (use default OpenWrt feeds, not GL.iNet's custom ones)
+          cd glinet-sdk
+          
+          # Update and install feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
-          # Copy custom package sources into SDK package directory
-          cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
-          cp -r "$WORKSPACE_DIR/amneziawg-tools" package/
-          cp -r "$WORKSPACE_DIR/luci-proto-amneziawg" package/
-
-          # Configure build (only the required packages)
-          cat > .config <<EOF
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_mt7981=y
-          CONFIG_TARGET_mediatek_mt7981_DEVICE_glinet_gl-mt3000=y
-          CONFIG_ALL_NONSHARED=y
-          CONFIG_ALL_KMODS=y
-          CONFIG_PACKAGE_kmod-amneziawg=m
-          CONFIG_PACKAGE_amneziawg-tools=y
-          CONFIG_PACKAGE_luci-proto-amneziawg=y
-          CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y
-          EOF
+          
+          # Copy your package source into the SDK's package directory
+          mkdir -p package/amneziawg
+          cp -r ../kmod-amneziawg ../amneziawg-tools ../luci-proto-amneziawg \
+                package/amneziawg/
+          
+          # Configure the build for your packages
+          echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
+          echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
+          echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-amneziawg-ru=y" >> .config
+          
           make defconfig
 
       - name: Build AmneziaWG packages
         run: |
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
-          cd "$SDK_DIR"
+          cd glinet-sdk
+          
+          # Build kmod-amneziawg (kernel module)
+          make package/amneziawg/kmod-amneziawg/compile V=s || true
+          
+          # Build amneziawg-tools (userspace)
+          make package/amneziawg/amneziawg-tools/compile V=s
+          
+          # Build luci-proto-amneziawg (web interface)
+          make package/amneziawg/luci-proto-amneziawg/compile V=s
+          
+          echo "Build completed."
+          find bin/ -name "*.ipk" 2>/dev/null || echo "No packages found yet."
 
-          # Build kernel module (kmod)
-          echo "Building kmod-amneziawg..."
-          make package/kmod-amneziawg/{download,prepare} V=s || true
-          make package/kmod-amneziawg/compile V=s
-
-          # Build userspace tools
-          echo "Building amneziawg-tools..."
-          make package/amneziawg-tools/{download,prepare} V=s
-          make package/amneziawg-tools/compile V=s
-
-          # Build LuCI proto
-          echo "Building luci-proto-amneziawg..."
-          make package/luci-proto-amneziawg/{download,prepare} V=s
-          make package/luci-proto-amneziawg/compile V=s
-
-          echo "Build completed. Packages:"
-          find bin/ -name "*.?pk" | grep -E "(amneziawg|luci-proto-amneziawg)" | head -20
-
-      - name: Prepare artifacts
+      - name: Collect artifacts
         run: |
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
-          VERSION="${{ inputs.version || '21.02.7' }}"
-          mkdir -p release
-          POSTFIX="v${VERSION}_aarch64_cortex-a53_mediatek_mt7981"
+          mkdir -p awg-release
+          cd glinet-sdk
+          
+          # Find and copy all relevant packages
+          find bin/ -name "*amneziawg*.ipk" -exec cp {} ../awg-release/ \; 2>/dev/null
+          find bin/ -name "*luci-proto-amneziawg*.ipk" -exec cp {} ../awg-release/ \; 2>/dev/null
+          find bin/ -name "*luci-i18n-amneziawg*.ipk" -exec cp {} ../awg-release/ \; 2>/dev/null
+          
+          echo "Built packages:"
+          ls -la ../awg-release/
 
-          # Find and copy each package with a predictable name
-          find "$SDK_DIR/bin/packages" -name "amneziawg-tools*.?pk" -exec sh -c '
-            file="$1"; postfix="$2"; ext="${file##*.}";
-            cp "$file" "release/amneziawg-tools_${postfix}.${ext}"
-          ' _ {} "${POSTFIX}" \; || echo "amneziawg-tools not found"
-
-          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.?pk" -exec sh -c '
-            file="$1"; postfix="$2"; ext="${file##*.}";
-            cp "$file" "release/luci-proto-amneziawg_${postfix}.${ext}"
-          ' _ {} "${POSTFIX}" \; || echo "luci-proto-amneziawg not found"
-
-          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.?pk" -exec sh -c '
-            file="$1"; postfix="$2"; ext="${file##*.}";
-            cp "$file" "release/luci-i18n-amneziawg-ru_${postfix}.${ext}"
-          ' _ {} "${POSTFIX}" \; || echo "luci-i18n not found"
-
-          find "$SDK_DIR/bin/targets" -name "kmod-amneziawg*.?pk" -exec sh -c '
-            file="$1"; postfix="$2"; ext="${file##*.}";
-            cp "$file" "release/kmod-amneziawg_${postfix}.${ext}"
-          ' _ {} "${POSTFIX}" \; || echo "kmod-amneziawg not found"
-
-          echo "Built artifacts:"
-          ls -la release/
-
-      - name: Upload release artifacts
-        uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        with:
-          files: release/*.?pk
-          tag_name: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload workflow artifacts (on manual dispatch)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch'
         with:
-          name: amneziawg-beryl7-${{ inputs.version || '21.02.7' }}
-          path: release/
+          name: amneziawg-beryl7-packages
+          path: awg-release/
+
+      - name: Create GitHub Release
+        if: github.event_name != 'workflow_call'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: awg-release/*.ipk
+          tag_name: v${{ needs.generate-config.outputs.job-config }}
+          generate_release_notes: true
