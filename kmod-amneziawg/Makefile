@@ -31,13 +31,14 @@ define Build/Prepare
 	$(call Build/Prepare/Default)
 	mkdir -p $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel
 	$(CP) $(LINUX_DIR)/* $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel/
-	# Patch compat.h: wrap ip_tunnel block in version guard
+	# Patch compat.h for OpenWrt 5.4 backported symbols
 	cd $(PKG_BUILD_DIR)/$(MAKE_PATH) && \
-	sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)$/{n;/^#define COMPAT_CRYPTO_IS_ZINC$/{n;s/#define COMPAT_MAYBE_SIMD_CONTEXT/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0)\n#define COMPAT_MAYBE_SIMD_CONTEXT/}}' \
-		compat/compat.h && \
-	sed -i '/^#define COMPAT_MAYBE_SIMD_CONTEXT(ctx)$$/a\
-#else\n#define COMPAT_MAYBE_SIMD_CONTEXT(ctx)\n#endif' \
-		compat/compat.h
+	sed -i '/^#include <linux\/ipv6.h>/a\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)' compat/compat.h && \
+	sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)/i\
+#endif' compat/compat.h && \
+	sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)$$/c\
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)' compat/compat.h
 endef
 
 define Build/Compile
