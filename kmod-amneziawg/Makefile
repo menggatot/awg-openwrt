@@ -31,14 +31,6 @@ define Build/Prepare
 	$(call Build/Prepare/Default)
 	mkdir -p $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel
 	$(CP) $(LINUX_DIR)/* $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel/
-	# Patch compat.h for OpenWrt 5.4 backported symbols
-	cd $(PKG_BUILD_DIR)/$(MAKE_PATH) && \
-	sed -i '/^#include <linux\/ipv6.h>/a\
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)' compat/compat.h && \
-	sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)/i\
-#endif' compat/compat.h && \
-	sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)$$/c\
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)' compat/compat.h
 endef
 
 define Build/Compile
