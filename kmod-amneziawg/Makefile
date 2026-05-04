@@ -28,13 +28,15 @@ define KernelPackage/amneziawg
 endef
 
 define Build/Prepare
-	$(call Build/Prepare/Default)
-	mkdir -p $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel
-	$(CP) $(LINUX_DIR)/* $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel/
-	# compat.h: skip ip_tunnel symbols already in OpenWrt 5.4 kernel
-	sed -i '/^#include <linux\/ipv6.h>/a\
-	#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)' \
-	$(PKG_BUILD_DIR)/$(MAKE_PATH)/compat/compat.h
+    $(call Build/Prepare/Default)
+    mkdir -p $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel
+    $(CP) $(LINUX_DIR)/* $(PKG_BUILD_DIR)/$(MAKE_PATH)/kernel/
+    # Patch compat.h: wrap ip_tunnel block in version guard
+    cd $(PKG_BUILD_DIR)/$(MAKE_PATH) && \
+    sed -i '/^#include <linux\/ipv6.h>/a\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)' compat/compat.h && \
+    sed -i '/^#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)/i\
+#endif' compat/compat.h
 endef
 
 define Build/Compile
