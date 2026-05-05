@@ -137,6 +137,8 @@ jobs:
           
           # Get absolute paths
           WORKSPACE_DIR=$(pwd)
+          echo "https://ftp.jaist.ac.jp/pub/sourceforge.jp/storage/g/i/im/immortalwrt/sources/" >> "$SDK_DIR/scripts/localmirrors"
+          export DOWNLOAD_MIRROR="https://ftp.jaist.ac.jp/pub/sourceforge.jp/storage/g/i/im/immortalwrt/sources/"
           
           cd "$SDK_DIR"
           
